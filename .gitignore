@@ -13,3 +13,6 @@ wheels/
 .listmonk/
 token
 *.token
+
+# server secrets
+deploy/mcp.env

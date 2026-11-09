@@ -12,11 +12,14 @@ See SEND_IS_NOT_EXPOSED below.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 
 BASE_URL = os.environ.get(
     "LISTMONK_URL", "https://send.destinyaiastrology.com"
@@ -44,21 +47,29 @@ UNTRUSTED_NOTE = (
 mcp = MCPServer("listmonk")
 
 
+def _check_token(value: str, source: str) -> str:
+    if ":" not in value:
+        raise ToolError(
+            f"{source} must contain 'username:token' (listmonk rejects a "
+            "bare token with 'invalid API credentials')."
+        )
+    return value
+
+
 def _token() -> str:
+    # On the server the token comes from the container's env file; locally,
+    # from ~/.listmonk/token.
+    env_value = os.environ.get("LISTMONK_TOKEN", "").strip()
+    if env_value:
+        return _check_token(env_value, "LISTMONK_TOKEN")
     if not TOKEN_FILE.exists():
-        raise RuntimeError(
+        raise ToolError(
             f"No listmonk token at {TOKEN_FILE}. Create it with:\n"
             f"  mkdir -p {TOKEN_FILE.parent}\n"
             f"  printf 'API_USERNAME:TOKEN' > {TOKEN_FILE}\n"
             f"  chmod 600 {TOKEN_FILE}"
         )
-    value = TOKEN_FILE.read_text().strip()
-    if ":" not in value:
-        raise RuntimeError(
-            f"{TOKEN_FILE} must contain 'username:token' (listmonk rejects a "
-            "bare token with 'invalid API credentials')."
-        )
-    return value
+    return _check_token(TOKEN_FILE.read_text().strip(), str(TOKEN_FILE))
 
 
 def _request(method: str, path: str, **kw: Any) -> Any:
@@ -72,16 +83,16 @@ def _request(method: str, path: str, **kw: Any) -> Any:
             **kw,
         )
     except httpx.RequestError as exc:
-        raise RuntimeError(f"Could not reach listmonk at {BASE_URL}: {exc}") from exc
+        raise ToolError(f"Could not reach listmonk at {BASE_URL}: {exc}") from exc
 
     if resp.status_code == 403:
-        raise RuntimeError(
+        raise ToolError(
             f"listmonk refused the request (403): {resp.text}\n"
             "'invalid session' = no credentials sent; 'invalid API credentials' "
             "= wrong user/token; 'unknown Authorization scheme' = wrong header."
         )
     if resp.status_code >= 400:
-        raise RuntimeError(f"listmonk returned {resp.status_code}: {resp.text}")
+        raise ToolError(f"listmonk returned {resp.status_code}: {resp.text}")
 
     payload = resp.json()
     return payload.get("data", payload) if isinstance(payload, dict) else payload
@@ -241,13 +252,13 @@ def set_campaign_status(campaign_id: int, status: str) -> dict:
     'running' (send now) is refused -- sending is a human decision.
     """
     if status in SEND_IS_NOT_EXPOSED:
-        raise RuntimeError(
+        raise ToolError(
             "Refusing to set status 'running'. That sends the campaign "
             "immediately to every subscriber on its lists and cannot be undone. "
             "Press Send in the listmonk UI instead."
         )
     if status not in ALLOWED_STATUS_CHANGES:
-        raise RuntimeError(
+        raise ToolError(
             f"Status {status!r} is not allowed. Allowed: {sorted(ALLOWED_STATUS_CHANGES)}."
         )
     return {"status_set": _request("PUT", f"/api/campaigns/{campaign_id}/status", json={"status": status})}
@@ -307,8 +318,52 @@ def update_subscriber(
     return {"updated": _request("PUT", f"/api/subscribers/{subscriber_id}", json=payload)}
 
 
+# --- Remote (HTTP) mode -----------------------------------------------------
+# Claude chat connectors need a public HTTPS URL. There is no OAuth here, so
+# access rests on two locks:
+#   1. this secret path -- every other path is a 404;
+#   2. nginx in front, which only admits Anthropic's outbound IP ranges.
+# The secret lives only in the server's env file, never in git or nginx config.
+
+MIN_SECRET_LEN = 32
+_URL_SAFE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def http_settings(env: Mapping[str, str]) -> dict[str, Any]:
+    """Validate the environment and build streamable-HTTP run() options."""
+    secret = env.get("MCP_PATH_SECRET", "").strip()
+    if not secret:
+        raise RuntimeError(
+            "MCP_PATH_SECRET is not set. Refusing to serve over HTTP without it. "
+            "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(36))'"
+        )
+    if len(secret) < MIN_SECRET_LEN:
+        raise RuntimeError(f"MCP_PATH_SECRET must be at least {MIN_SECRET_LEN} characters.")
+    if not set(secret) <= _URL_SAFE:
+        raise RuntimeError("MCP_PATH_SECRET must be URL-safe (letters, digits, - and _).")
+
+    public_host = env.get("MCP_PUBLIC_HOST", "").strip()
+    if not public_host:
+        raise RuntimeError("MCP_PUBLIC_HOST is not set (e.g. mcp.destinyaiastrology.com).")
+
+    return {
+        "host": env.get("MCP_BIND_HOST", "0.0.0.0"),
+        "port": int(env.get("MCP_PORT", "8000")),
+        "streamable_http_path": f"/{secret}/mcp",
+        "stateless_http": True,
+        "transport_security": TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[public_host],
+            allowed_origins=[f"https://{public_host}"],
+        ),
+    }
+
+
 def main() -> None:
-    mcp.run()
+    if os.environ.get("MCP_TRANSPORT") == "streamable-http":
+        mcp.run("streamable-http", **http_settings(os.environ))
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

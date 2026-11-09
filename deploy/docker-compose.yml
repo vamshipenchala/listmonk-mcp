@@ -1,0 +1,25 @@
+# Separate compose project: does NOT modify the live listmonk stack.
+# It joins listmonk's existing Docker network and reaches it at http://app:9000.
+services:
+  mcp:
+    build: ..
+    image: listmonk-mcp:latest
+    container_name: listmonk_mcp
+    restart: unless-stopped
+    env_file: mcp.env          # chmod 600; holds LISTMONK_TOKEN and MCP_PATH_SECRET
+    environment:
+      LISTMONK_URL: http://app:9000
+      MCP_PUBLIC_HOST: mcp.destinyaiastrology.com
+    ports:
+      - "127.0.0.1:8765:8765"  # only nginx on the same box can reach it
+    networks:
+      - listmonk
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+
+networks:
+  listmonk:
+    external: true
+    name: ${LISTMONK_NETWORK:?set LISTMONK_NETWORK to listmonk's docker network name}
