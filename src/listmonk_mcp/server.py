@@ -50,6 +50,12 @@ TOKEN_FILE = Path(
 SEND_TOKEN_FILE = Path(
     os.environ.get("LISTMONK_SEND_TOKEN_FILE", "~/.listmonk/send-token")
 ).expanduser()
+# Who send_test may mail. Kept out of the code (real people's addresses don't
+# belong in a public repo): env LISTMONK_TEST_RECIPIENTS, comma-separated, or
+# one address per line in this file.
+TEST_RECIPIENTS_FILE = Path(
+    os.environ.get("LISTMONK_TEST_RECIPIENTS_FILE", "~/.listmonk/test-recipients")
+).expanduser()
 
 # --- The send boundary ------------------------------------------------------
 # In listmonk, scheduling and sending are the SAME endpoint:
@@ -688,6 +694,54 @@ def blocklist_emails(emails: list[str]) -> dict:
         "not_found": [e for e in wanted if e not in by_email],
         "note": "Blocklisted addresses were unsubscribed from every list shown. "
                 "Unblocking does not resubscribe them.",
+    }
+
+
+# --- Test sends --------------------------------------------------------------
+
+
+def _test_recipients() -> list[str]:
+    raw = os.environ.get("LISTMONK_TEST_RECIPIENTS", "")
+    if not raw.strip() and TEST_RECIPIENTS_FILE.exists():
+        raw = TEST_RECIPIENTS_FILE.read_text()
+    allowed = [e.strip().lower() for e in re.split(r"[,\n]", raw) if e.strip()]
+    if not allowed:
+        raise ToolError(
+            "No test addresses configured (LISTMONK_TEST_RECIPIENTS or "
+            f"{TEST_RECIPIENTS_FILE}). Refusing to send a test."
+        )
+    return allowed
+
+
+@mcp.tool()
+def send_test(campaign_id: int, recipients: list[str] | None = None) -> dict:
+    """Send a test of a campaign to the configured test address(es) only.
+
+    Sends the campaign exactly as saved in listmonk -- edit it first with
+    update_campaign if needed. `recipients` defaults to every configured test
+    address; any other address refuses the whole call. Does not change the
+    campaign's status and does not reach its lists.
+    """
+    allowed = _test_recipients()
+    chosen = allowed if recipients is None else [r.strip().lower() for r in recipients]
+    outside = [r for r in chosen if r not in allowed]
+    if outside or not chosen:
+        raise ToolError(
+            f"Not a configured test address: {outside or chosen!r}. Tests go only to "
+            "the configured test address(es)."
+        )
+    current = _request("GET", f"/api/campaigns/{campaign_id}")
+    # The saved campaign, not caller-supplied content: listmonk's test endpoint
+    # sends whatever body it's given, so this keeps the tool from becoming a
+    # general-purpose mailer.
+    payload = _campaign_payload(current)
+    payload["subscribers"] = chosen
+    _request("POST", f"/api/campaigns/{campaign_id}/test", json=payload)
+    return {
+        "sent_test_to": chosen,
+        "campaign": current.get("name"),
+        "subject": current.get("subject"),
+        "note": "Test only. The campaign's status and lists are unchanged.",
     }
 
 

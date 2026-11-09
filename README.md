@@ -82,6 +82,12 @@ SQL can ride along), reports addresses that weren't found, and records each
 person's lists first — because listmonk's blocklist also unsubscribes them from
 every list, and unblocking doesn't undo that.
 
+**Test sends can't become a mailer.** listmonk's test endpoint sends whatever
+subject and body it's handed, to any existing subscriber. `send_test` takes no
+content — it sends the campaign exactly as saved — and only to addresses in a
+private allowlist (`LISTMONK_TEST_RECIPIENTS`, kept out of the repo because
+those are real people's addresses). Any other address refuses the whole call.
+
 **Bugs found by testing the seams.** listmonk's update endpoint replaces the
 whole campaign, so the original `schedule_campaign` (which sent only `send_at`)
 could never have worked, and `update_campaign` could silently reset a
@@ -119,6 +125,7 @@ TLS is via Let's Encrypt with automatic renewal.
 | `list_templates` | `add_subscriber`, `update_subscriber` | |
 | | `add_matching_to_list` *(≤500, reminder lists only)* | |
 | | `blocklist_emails` *(≤50 exact addresses)* | |
+| | `send_test` *(saved campaign → configured test address only)* | |
 
 ## Running it
 
@@ -146,7 +153,7 @@ sudo certbot --nginx -d <your-host>
 uv run pytest -q
 ```
 
-88 tests, no network needed. A fake listmonk records every call, so the tests
+96 tests, no network needed. A fake listmonk records every call, so the tests
 prove *which credential* made each request and that nothing is written before
 approval. They cover: no tool can send or schedule (and the refusal reason
 reaches Claude); only pause/unschedule ever load the send credential, and every
