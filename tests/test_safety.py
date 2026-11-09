@@ -54,7 +54,8 @@ def test_no_send_tool_is_registered():
     tools = asyncio.run(server.mcp.list_tools())
     names = {t.name for t in tools}
     for forbidden in ("send_campaign", "send", "test_campaign", "delete_campaign",
-                      "delete_subscriber", "delete_list", "sql_query", "import_subscribers"):
+                      "delete_subscriber", "delete_list", "sql_query", "import_subscribers",
+                      "schedule_campaign", "approve_send"):
         assert forbidden not in names, f"{forbidden} must not be exposed"
 
 
@@ -64,7 +65,7 @@ def test_expected_tools_are_registered():
     expected = {
         "list_lists", "get_list", "list_subscribers", "list_campaigns",
         "get_campaign", "get_campaign_analytics", "list_templates",
-        "create_campaign", "update_campaign", "schedule_campaign",
+        "create_campaign", "update_campaign", "request_send",
         "set_campaign_status", "create_list", "add_subscriber", "update_subscriber",
     }
     assert expected <= names, f"missing: {expected - names}"
