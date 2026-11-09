@@ -27,7 +27,9 @@ CAMPAIGN = {
     "updated_at": "2026-11-08T03:00:00Z",
     "lists": [{"id": 5, "name": "Android India"}, {"id": 3, "name": "Win-Back"}],
 }
-LISTS = {5: {"id": 5, "subscriber_count": 338}, 3: {"id": 3, "subscriber_count": 44}}
+LIVE_COUNTS = {5: 338, 3: 44}
+# listmonk caches list counts; a just-filled list reports 0. Never use this.
+LISTS = {5: {"id": 5, "subscriber_count": 0}, 3: {"id": 3, "subscriber_count": 0}}
 
 
 class FakeListmonk:
@@ -41,6 +43,10 @@ class FakeListmonk:
             return copy.deepcopy(self.campaign)
         if method == "GET" and path.startswith("/api/lists/"):
             return LISTS[int(path.rsplit("/", 1)[1])]
+        if method == "GET" and path == "/api/subscribers":
+            params = kw["params"]
+            assert params["per_page"] == 1
+            return {"results": [], "total": LIVE_COUNTS[params["list_id"]]}
         if method == "PUT":
             return {"ok": True}
         raise AssertionError(f"unexpected call {method} {path}")

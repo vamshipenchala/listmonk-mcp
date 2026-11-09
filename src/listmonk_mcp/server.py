@@ -507,8 +507,12 @@ async def approval_page(request: Request) -> HTMLResponse:
 
     counts = []
     for l in current.get("lists", []):
-        info = await run_in_threadpool(_request, "GET", f"/api/lists/{l['id']}")
-        counts.append((l.get("name", f"List {l['id']}"), int(info.get("subscriber_count", 0))))
+        # Live count. GET /api/lists/{id} returns a cached subscriber_count that
+        # can read 0 for a list filled minutes ago -- not acceptable on the page
+        # where a human decides to send.
+        info = await run_in_threadpool(_request, "GET", "/api/subscribers",
+                                       params={"list_id": l["id"], "per_page": 1})
+        counts.append((l.get("name", f"List {l['id']}"), int(info.get("total", 0))))
     total = sum(n for _, n in counts)
     lists_html = "<br>".join(f"{html.escape(name)} ({n:,})" for name, n in counts) or "none"
     action = (f"Schedule for {_when_text(pending.send_at)}" if pending.send_at
