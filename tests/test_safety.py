@@ -137,7 +137,7 @@ def test_403_error_explains_the_three_causes(monkeypatch):
 # to start without a strong one.
 
 GOOD_SECRET = "a" * 40
-HOST = "mcp.destinyaiastrology.com"
+HOST = "listmonkmcp.destinyaiastrology.com"
 
 
 def test_http_mode_refuses_to_start_without_secret():
