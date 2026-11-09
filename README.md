@@ -134,7 +134,7 @@ sudo certbot --nginx -d <your-host>
 uv run pytest -q
 ```
 
-51 tests, no network needed. A fake listmonk records every call, so the tests
+68 tests, no network needed. A fake listmonk records every call, so the tests
 prove *which credential* made each request and that nothing is written before
 approval. They cover: no tool can send or schedule (and the refusal reason
 reaches Claude); only pause/unschedule ever load the send credential, and every
@@ -145,6 +145,19 @@ nothing; any edit after the request voids it; schedule times that have passed
 are refused; listmonk errors are shown, not retried; updates resend every field
 (listmonk's PUT replaces the campaign); plus token parsing, untrusted-data
 labelling and HTTP-mode startup checks.
+
+## Secret guard
+
+A git hook blocks any commit or push containing a listmonk token, the MCP URL
+secret, a private key, an AWS key, or a filled-in secret variable. It compares
+against the real values in `~/.listmonk/` at run time (the hook holds none) and
+reports only *which kind* of secret and where, never the value. The pre-push
+check scans every commit being pushed, so a secret that was committed with
+`--no-verify` and later deleted is still caught. Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
 
 ## Stack
 
