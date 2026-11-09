@@ -8,7 +8,9 @@ sends the `Authorization: token user:token` header it expects.
 Claude can prepare a send but cannot execute one. `request_send` returns a
 one-time approval link; only a human clicking it (from a non-Anthropic IP, see
 deploy/nginx-*.conf) sends or schedules, using a separate send credential that
-no tool ever touches. See SEND_IS_NOT_EXPOSED and the approval section below.
+tools never receive -- except set_campaign_status, and only for "paused" and
+"draft" (listmonk demands the send permission even to pause). See
+SEND_IS_NOT_EXPOSED and the approval section below.
 
 Deliberately absent: deleting anything, bulk import, and arbitrary SQL.
 """
@@ -313,7 +315,12 @@ def set_campaign_status(campaign_id: int, status: str) -> dict:
         raise ToolError(
             f"Status {status!r} is not allowed. Allowed: {sorted(ALLOWED_STATUS_CHANGES)}."
         )
-    return {"status_set": _request("PUT", f"/api/campaigns/{campaign_id}/status", json={"status": status})}
+    # listmonk requires campaigns:send for ANY status change, even pausing, so
+    # this is the one tool that uses the send credential. It is reached only
+    # after the checks above, which allow nothing but values that stop mail.
+    return {"status_set": _request(
+        "PUT", f"/api/campaigns/{campaign_id}/status", _send_token(), json={"status": status}
+    )}
 
 
 # --- Human approval for send / schedule -------------------------------------

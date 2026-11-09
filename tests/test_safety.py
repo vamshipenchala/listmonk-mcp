@@ -40,11 +40,12 @@ def test_unknown_status_is_refused(monkeypatch):
 def test_allowed_statuses_pass_through(monkeypatch):
     seen = {}
 
-    def fake(method, path, **kw):
+    def fake(method, path, token=None, **kw):
         seen["json"] = kw.get("json")
         return {"ok": True}
 
     monkeypatch.setattr(server, "_request", fake)
+    monkeypatch.setattr(server, "_send_token", lambda: "u:send")
     server.set_campaign_status(campaign_id=7, status="paused")
     assert seen["json"] == {"status": "paused"}
 

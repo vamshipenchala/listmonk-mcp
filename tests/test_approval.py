@@ -242,3 +242,33 @@ def test_listmonk_error_on_approval_is_shown_not_retried(lm, client, monkeypatch
     assert r.status_code == 502
     assert "permission denied" in r.text
     assert client.post(f"/approve/{token}", data={"confirm": "yes"}).status_code == 410
+
+
+# --- Pause / unschedule (Option A) -------------------------------------------
+# listmonk requires campaigns:send for ANY status change, even pausing. So this
+# one tool uses the send credential -- but only for values that stop mail.
+
+
+@pytest.mark.parametrize("status", ["paused", "draft"])
+def test_pause_and_unschedule_use_send_credential(lm, status):
+    server.set_campaign_status(campaign_id=7, status=status)
+    assert lm.writes() == [
+        ("PUT", "/api/campaigns/7/status", "claude_cmo_send:SENDTOKEN", {"status": status})
+    ]
+
+
+@pytest.mark.parametrize("status", ["running", "scheduled", "cancelled", "finished", "RUNNING", " running"])
+def test_other_statuses_refused_before_send_credential_is_loaded(lm, monkeypatch, status):
+    def no_token():
+        raise AssertionError("send credential loaded for a refused status")
+    monkeypatch.setattr(server, "_send_token", no_token)
+    with pytest.raises(ToolError):
+        server.set_campaign_status(campaign_id=7, status=status)
+    assert lm.calls == []
+
+
+def test_only_set_campaign_status_ever_uses_send_credential(lm):
+    """Every other write tool runs on the read credential."""
+    server.request_send(campaign_id=7)
+    server.update_campaign(campaign_id=7, subject="x")
+    assert all(token is None for _, _, token, _ in lm.calls)

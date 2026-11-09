@@ -51,8 +51,15 @@ preview; the button press executes it. The approval is:
   `updated_at`; any edit voids the link, and scheduled campaigns can't be edited;
 - **single-use**, marked used *before* the call so it can never run twice;
 - **short-lived** (30 minutes) and POST-only, so link previews can't trigger it;
-- **executed with a separate credential** (`claude_cmo_send`) that no tool ever
-  receives. Tools use `claude_cmo_read`, which can't send at all.
+- **executed with a separate credential** (`claude_cmo_send`). Tools run on a
+  draft-only credential that listmonk itself won't let send, so even a bug in
+  this server's checks can't produce an unapproved send — listmonk refuses it.
+
+One deliberate exception: listmonk requires the send permission for *any*
+status change, even pausing. So `set_campaign_status` uses the send credential,
+but only after refusing every value except `paused` and `draft` — values that
+stop mail rather than start it. That keeps "stop that send!" available from
+chat; the worst a bug there could do is pause or unschedule a campaign.
 
 *Known limit:* if Claude can drive your own browser (e.g. a browser extension),
 it could click from your IP. The server can't tell those apart.
@@ -127,10 +134,11 @@ sudo certbot --nginx -d <your-host>
 uv run pytest -q
 ```
 
-42 tests, no network needed. A fake listmonk records every call, so the tests
+51 tests, no network needed. A fake listmonk records every call, so the tests
 prove *which credential* made each request and that nothing is written before
 approval. They cover: no tool can send or schedule (and the refusal reason
-reaches Claude); requesting writes nothing; tools never use the send
+reaches Claude); only pause/unschedule ever load the send credential, and every
+other status is refused before it's loaded; requesting writes nothing; tools never use the send
 credential; the approval page escapes content and writes nothing; approval
 executes exactly once; expired, unknown, unconfirmed and already-used links do
 nothing; any edit after the request voids it; schedule times that have passed
