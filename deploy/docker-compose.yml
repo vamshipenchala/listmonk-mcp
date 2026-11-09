@@ -9,7 +9,7 @@ services:
     env_file: mcp.env          # chmod 600; holds LISTMONK_TOKEN and MCP_PATH_SECRET
     environment:
       LISTMONK_URL: http://app:9000
-      MCP_PUBLIC_HOST: mcp.destinyaiastrology.com
+      MCP_PUBLIC_HOST: listmonkmcp.destinyaiastrology.com
     ports:
       - "127.0.0.1:8765:8765"  # only nginx on the same box can reach it
     networks:

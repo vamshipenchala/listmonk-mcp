@@ -344,7 +344,7 @@ def http_settings(env: Mapping[str, str]) -> dict[str, Any]:
 
     public_host = env.get("MCP_PUBLIC_HOST", "").strip()
     if not public_host:
-        raise RuntimeError("MCP_PUBLIC_HOST is not set (e.g. mcp.destinyaiastrology.com).")
+        raise RuntimeError("MCP_PUBLIC_HOST is not set (e.g. listmonkmcp.destinyaiastrology.com).")
 
     return {
         "host": env.get("MCP_BIND_HOST", "0.0.0.0"),
