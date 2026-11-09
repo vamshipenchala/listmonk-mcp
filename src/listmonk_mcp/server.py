@@ -21,6 +21,7 @@ import hashlib
 import html
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -599,6 +600,95 @@ def update_subscriber(
         "attribs": attribs if attribs is not None else current.get("attribs", {}),
     }
     return {"updated": _request("PUT", f"/api/subscribers/{subscriber_id}", json=payload)}
+
+
+# --- Bulk, bounded ----------------------------------------------------------
+
+BULK_ADD_CAP = 500
+# Lists Claude may bulk-fill: these name prefixes, or tagged "cmo". Main lists
+# (waitlist, launch lists) match neither, so a bad query can't touch them.
+BULK_TARGET_PREFIXES = ("Win-Back Reminder", "Android Reminder")
+BULK_TARGET_TAG = "cmo"
+BLOCKLIST_CAP = 50
+# Deliberately narrow: no quotes, commas, spaces or wildcards can appear, so an
+# address can be placed in a SQL string literal without any way to break out.
+_EXACT_EMAIL = re.compile(r"^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$")
+
+
+@mcp.tool()
+def add_matching_to_list(query: str, list_id: int) -> dict:
+    """Add every subscriber matching a listmonk SQL query to a reminder list.
+
+    `query` is a fragment over the subscribers table, e.g.
+    subscribers.attribs->>'plan' = 'plus'. The target list must be named
+    "Win-Back Reminder..." or "Android Reminder...", or be tagged "cmo".
+    Refused above 500 matches. Count first with list_subscribers if unsure.
+    """
+    if not query.strip():
+        raise ToolError(
+            "Refusing an empty query: listmonk would apply it to every subscriber."
+        )
+    target = _request("GET", f"/api/lists/{list_id}")
+    name = str(target.get("name", ""))
+    if not (name.startswith(BULK_TARGET_PREFIXES) or BULK_TARGET_TAG in (target.get("tags") or [])):
+        raise ToolError(
+            f"List {list_id} ({name!r}) is not a reminder list. Bulk adds only go to "
+            f"lists named {' or '.join(repr(p + '...') for p in BULK_TARGET_PREFIXES)}, "
+            f"or tagged {BULK_TARGET_TAG!r}. Create one with create_list first."
+        )
+    matched = int(_request("GET", "/api/subscribers", params={"query": query, "per_page": 1}).get("total", 0))
+    if matched > BULK_ADD_CAP:
+        raise ToolError(
+            f"The query matches {matched} subscribers; the cap is {BULK_ADD_CAP}. Narrow it."
+        )
+    if matched:
+        _request("PUT", "/api/subscribers/query/lists", json={
+            "query": query, "action": "add", "target_list_ids": [list_id], "status": "confirmed",
+        })
+    return {
+        "added_up_to": matched,
+        "list": name,
+        "list_id": list_id,
+        "note": "Count taken just before adding; people already on the list are skipped.",
+    }
+
+
+@mcp.tool()
+def blocklist_emails(emails: list[str]) -> dict:
+    """Blocklist up to 50 exact email addresses (bounced, invalid, or asked to stop).
+
+    Accepts exact addresses only -- no SQL, wildcards or lists in one string.
+    Blocklisting ALSO unsubscribes the person from every list, and unblocking
+    later does not restore those subscriptions; the result records each
+    address's lists so a mistake can be undone by hand.
+    """
+    if len(emails) > BLOCKLIST_CAP:
+        raise ToolError(f"{len(emails)} addresses given; the cap is {BLOCKLIST_CAP} per call.")
+    bad = [e for e in emails if not _EXACT_EMAIL.match(e.strip())]
+    if bad:
+        raise ToolError(f"Not an exact email address: {bad!r}. Give exact emails only.")
+    wanted = sorted({e.strip().lower() for e in emails})
+    if not wanted:
+        return {"blocklisted": {}, "already_blocklisted": [], "not_found": []}
+
+    literal = ", ".join(f"'{e}'" for e in wanted)  # safe: _EXACT_EMAIL forbids quotes
+    found = _request("GET", "/api/subscribers", params={
+        "query": f"LOWER(subscribers.email) IN ({literal})", "per_page": BLOCKLIST_CAP,
+    }).get("results", [])
+    by_email = {str(s["email"]).lower(): s for s in found}
+
+    already = [e for e in wanted if e in by_email and by_email[e].get("status") == "blocklisted"]
+    to_block = {e: by_email[e] for e in wanted if e in by_email and e not in already}
+    if to_block:
+        _request("PUT", "/api/subscribers/blocklist",
+                 json={"ids": [s["id"] for s in to_block.values()]})
+    return {
+        "blocklisted": {e: [l.get("name") for l in s.get("lists", [])] for e, s in to_block.items()},
+        "already_blocklisted": already,
+        "not_found": [e for e in wanted if e not in by_email],
+        "note": "Blocklisted addresses were unsubscribed from every list shown. "
+                "Unblocking does not resubscribe them.",
+    }
 
 
 # --- Remote (HTTP) mode -----------------------------------------------------
